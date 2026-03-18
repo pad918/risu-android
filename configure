@@ -91,10 +91,10 @@ for opt do
   esac
 done
 
-CC="${CC-${CROSS_PREFIX}gcc}"
-AS="${AS-${CROSS_PREFIX}as}"
-OBJCOPY="${OBJCOPY-${CROSS_PREFIX}objcopy}"
-OBJDUMP="${OBJDUMP-${CROSS_PREFIX}objdump}"
+#CC="${CC-${CROSS_PREFIX}gcc}"
+#AS="${AS-${CROSS_PREFIX}as}"
+#OBJCOPY="${OBJCOPY-${CROSS_PREFIX}objcopy}"
+#OBJDUMP="${OBJDUMP-${CROSS_PREFIX}objdump}"
 
 if test "x${ARCH}" = "x"; then
     guess_arch

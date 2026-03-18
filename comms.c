@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <netdb.h>
+#include <sys/uio.h> // Needed to compile for android
 
 #include "risu.h"
 
