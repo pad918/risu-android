@@ -6,3 +6,5 @@ risu
 core
 config.h
 Makefile.in
+
+*.out

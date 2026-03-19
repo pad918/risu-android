@@ -8,7 +8,7 @@ PAGE_ALIGN_FLAGS="-Wl,-z,max-page-size=16384"
 CC="$TOOLCHAIN/bin/aarch64-linux-android35-clang $PAGE_ALIGN_FLAGS"
 
 # A little bit hacky, but works?
-AS="$CC -nostdlib"
+AS="$CC"
 OBJCOPY=$TOOLCHAIN/bin/llvm-objcopy
 OBJDUMP=$TOOLCHAIN/bin/llvm-objdump
 
@@ -19,9 +19,3 @@ ARCH=aarch64 CC=$CC AS=$AS OBJCOPY=$OBJCOPY OBJDUMP=$OBJDUMP ./configure
 
 make clean
 make
-
-
-# Push files to android device over adb
-adb shell mkdir -p /data/local/tmp/risu
-adb push risu /data/local/tmp/risu
-adb push test_aarch64.bin /data/local/tmp/risu

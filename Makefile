@@ -43,7 +43,7 @@ $(PROG): $(OBJS)
 	$(OBJCOPY) -O binary $< $@
 
 %_$(ARCH).elf: %_$(ARCH).s
-	$(AS) -nostdlib -o $@ $<
+	$(AS) -c -o $@ $<
 
 clean:
 	rm -f $(PROG) $(OBJS) $(BINS)

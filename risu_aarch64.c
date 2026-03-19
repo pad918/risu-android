@@ -75,6 +75,29 @@ int send_register_info(int sock, void *uc)
     return 0;
 }
 
+int recv_and_compare(int sock, int op){
+    int resp = 0;
+    int recv_err = recv_data_pkt(sock, &apprentice_ri, sizeof(apprentice_ri));
+    uint64_t pc_save = apprentice_ri.pc;
+    /* Set apprentice PC to master PC temporarely
+    to avoid comparing PC values */
+    apprentice_ri.pc = master_ri.pc;
+    if (recv_err) {
+        packet_mismatch = 1;
+        resp = 2;
+
+    } else if (!reginfo_is_eq(&master_ri, &apprentice_ri)) {
+        /* register mismatch */
+        resp = 2;
+
+    } else if (op == OP_TESTEND) {
+        resp = 1;
+    }
+    send_response_byte(sock, resp);
+    apprentice_ri.pc = pc_save;
+    return resp;
+}
+
 /* Read register info from the socket and compare it with that from the
  * ucontext. Return 0 for match, 1 for end-of-test, 2 for mismatch.
  * NB: called from a signal handler.
@@ -97,18 +120,7 @@ int recv_and_compare_register_info(int sock, void *uc)
         /* Do a simple register compare on (a) explicit request
          * (b) end of test (c) a non-risuop UNDEF
          */
-        if (recv_data_pkt(sock, &apprentice_ri, sizeof(apprentice_ri))) {
-            packet_mismatch = 1;
-            resp = 2;
-
-        } else if (!reginfo_is_eq(&master_ri, &apprentice_ri)) {
-            /* register mismatch */
-            resp = 2;
-
-        } else if (op == OP_TESTEND) {
-            resp = 1;
-        }
-        send_response_byte(sock, resp);
+        resp=recv_and_compare(sock, op);
         break;
       case OP_SETMEMBLOCK:
           memblock = (void *)master_ri.regs[0];
