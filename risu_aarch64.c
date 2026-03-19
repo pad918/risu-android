@@ -178,11 +178,13 @@ int report_match_status(void)
        return 0;
    }
 
+   reginfo_dump_mismatch(&master_ri, &apprentice_ri, stderr);
+
    fprintf(stderr, "master reginfo:\n");
    reginfo_dump(&master_ri, stderr);
    fprintf(stderr, "apprentice reginfo:\n");
    reginfo_dump(&apprentice_ri, stderr);
 
-   reginfo_dump_mismatch(&master_ri, &apprentice_ri, stderr);
+  
    return resp;
 }

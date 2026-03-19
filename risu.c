@@ -43,6 +43,7 @@ void master_sigill(int sig, siginfo_t *si, void *uc)
    {
       case 0:
          /* match OK */
+         printf("MATCH!\n");
          advance_pc(uc);
          return;
       default:
@@ -123,8 +124,12 @@ void load_image(const char *imgfile)
 
 int master(int sock)
 {
+   /* Sigsetjmp works like a goto. It returns if comming here on its own
+      and 1 if it was jumped back with siglongjmp */
    if (sigsetjmp(jmpbuf, 1))
    {
+      // Sleep to make sure prints are printed in order
+      sleep(2); 
       return report_match_status();
    }
    master_socket = sock;

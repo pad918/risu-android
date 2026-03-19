@@ -35,6 +35,8 @@ void reginfo_init(struct reginfo *ri, ucontext_t *uc)
 
     ri->fault_address = uc->uc_mcontext.fault_address;
     ri->faulting_insn = *((uint32_t *)uc->uc_mcontext.pc);
+    // For now assume only one instr was tested
+    ri->tested_insn = *((uint32_t *)uc->uc_mcontext.pc-1);
 
     ctx = (struct _aarch64_ctx *)&uc->uc_mcontext.__reserved[0];
 
@@ -89,6 +91,7 @@ int reginfo_dump_mismatch(struct reginfo *m, struct reginfo *a, FILE *f)
 {
     int i;
     fprintf(f, "mismatch detail (master : apprentice):\n");
+    fprintf(f, "Tested instruction: %08x\n", m->tested_insn);
     if (m->faulting_insn != a->faulting_insn) {
         fprintf(f, "  faulting insn mismatch %08x vs %08x\n",
                 m->faulting_insn, a->faulting_insn);
