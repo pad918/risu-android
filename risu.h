@@ -14,6 +14,13 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
 
 /* Socket related routines */
 int master_connect(int port);
@@ -62,5 +69,8 @@ int report_match_status(void);
 /* Move the PC past this faulting insn by adjusting ucontext
  */
 void advance_pc(void *uc);
+
+/* Loads the binary, but replaces signals with inline hooks */
+void* load_with_inline_hooks(const char *imgfile, void (*cb)(void));
 
 #endif /* RISU_H */

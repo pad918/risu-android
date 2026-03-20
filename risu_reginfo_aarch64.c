@@ -18,12 +18,12 @@
 #include "risu_reginfo_aarch64.h"
 
 /* reginfo_init: initialize with a ucontext */
-void reginfo_init(struct reginfo *ri, ucontext_t *uc)
+/*void reginfo_init(struct reginfo *ri, ucontext_t *uc)
 {
     int i;
     struct _aarch64_ctx *ctx;
     struct fpsimd_context *fp;
-    /* necessary to be able to compare with memcmp later */
+    
     memset(ri, 0, sizeof(*ri));
 
     for (i = 0; i < 31; i++)
@@ -31,7 +31,7 @@ void reginfo_init(struct reginfo *ri, ucontext_t *uc)
 
     ri->sp = 0xdeadbeefdeadbeef;
     ri->pc = uc->uc_mcontext.pc - image_start_address;
-    ri->flags = uc->uc_mcontext.pstate & 0xf0000000; /* get only flags */
+    ri->flags = uc->uc_mcontext.pstate & 0xf0000000; 
 
     ri->fault_address = uc->uc_mcontext.fault_address;
     ri->faulting_insn = *((uint32_t *)uc->uc_mcontext.pc);
@@ -55,6 +55,52 @@ void reginfo_init(struct reginfo *ri, ucontext_t *uc)
 
     for (i = 0; i < 32; i++)
         ri->vregs[i] = fp->vregs[i];
+};
+*/
+
+void reginfo_init(struct reginfo *ri, uint64_t *uc)
+{
+    int i;
+    struct _aarch64_ctx *ctx;
+    struct fpsimd_context *fp;
+    /* necessary to be able to compare with memcmp later */
+    memset(ri, 0, sizeof(*ri));
+
+    /* FOR NOW, ONLY COPY THE GP REGISTERS! */
+    for (i = 0; i < 31; i++)
+        ri->regs[i] = uc[i];
+
+    ri->sp = 0xdeadbeefdeadbeef;
+    //ri->pc = uc->uc_mcontext.pc - image_start_address;
+    ri->pc = 0;
+    //ri->flags = uc->uc_mcontext.pstate & 0xf0000000;
+    ri->flags = 0;
+
+    ri->fault_address = 0;//uc->uc_mcontext.fault_address;
+    ri->faulting_insn = 0;//*((uint32_t *)uc->uc_mcontext.pc);
+    // For now assume only one instr was tested
+    ri->tested_insn = 0;//*((uint32_t *)uc->uc_mcontext.pc-1);
+    
+    // SKIP Floating point and Vector state for now!
+    /*
+    ctx = (struct _aarch64_ctx *)&uc->uc_mcontext.__reserved[0];
+
+    while (ctx->magic != FPSIMD_MAGIC && ctx->size != 0) {
+        ctx += (ctx->size + sizeof(*ctx) - 1) / sizeof(*ctx);
+    }
+
+    if (ctx->magic != FPSIMD_MAGIC || ctx->size != sizeof(*fp)) {
+        fprintf(stderr, "risu_reginfo_aarch64: failed to get FP/SIMD state\n");
+        return;
+    }
+
+    fp = (struct fpsimd_context *)ctx;
+    ri->fpsr = fp->fpsr;
+    ri->fpcr = fp->fpcr;
+
+    for (i = 0; i < 32; i++)
+        ri->vregs[i] = fp->vregs[i];
+    */
 };
 
 /* reginfo_is_eq: compare the reginfo structs, returns nonzero if equal */

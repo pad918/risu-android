@@ -12,18 +12,12 @@
 
 /* Random Instruction Sequences for Userspace */
 
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
+
 #include <signal.h>
 #include <ucontext.h>
 #include <getopt.h>
 #include <setjmp.h>
 #include <assert.h>
-#include <sys/stat.h>
-#include <sys/mman.h>
-#include <fcntl.h>
 #include <string.h>
 
 #include "risu.h"
@@ -36,6 +30,125 @@ sigjmp_buf jmpbuf;
 
 /* Should we test for FP exception status bits? */
 int test_fp_exc = 0;
+
+void master_test(void* uc){
+   fprintf(stderr, "CALLED HOOK IN MASTER\n");
+   sleep(2);
+   fprintf(stderr, "STATE: \n");
+   for(int i=0; i<31; i++){
+      fprintf(stderr, "R%x: %16lx\n", i, *((uint64_t*)uc+i));
+   }
+}
+
+void end_tests(){
+   fprintf(stderr, "Ending tests normally\n");
+   sleep(2);
+   exit(0);
+}
+
+/* risu corrupts sp */
+__attribute__((naked))
+void master_hook_cb(){
+   asm volatile(
+      "bti c                           \n"
+      
+      
+      // SAVE REGS
+      "sub sp, sp, #256          \n"
+      "str x0, [sp, #0]         \n"
+      "str x1, [sp, #8]         \n"
+      "str x2, [sp, #16]         \n"
+      "str x3, [sp, #24]         \n"
+      "str x4, [sp, #32]         \n"
+      "str x5, [sp, #40]         \n"
+      "str x6, [sp, #48]         \n"
+      "str x7, [sp, #56]         \n"
+      "str x8, [sp, #64]         \n"
+      "str x9, [sp, #72]         \n"
+      "str x10, [sp, #80]         \n"
+      "str x11, [sp, #88]         \n"
+      "str x12, [sp, #96]         \n"
+      "str x13, [sp, #104]         \n"
+      "str x14, [sp, #112]         \n"
+      "str x15, [sp, #120]         \n"
+      "str x16, [sp, #128]         \n"
+      "str x17, [sp, #136]         \n"
+      "str x18, [sp, #144]         \n"
+      "str x19, [sp, #152]         \n"
+      "str x20, [sp, #160]         \n"
+      "str x21, [sp, #168]         \n"
+      "str x22, [sp, #176]         \n"
+      "str x23, [sp, #184]         \n"
+      "str x24, [sp, #192]         \n"
+      "str x25, [sp, #200]         \n"
+      "str x26, [sp, #208]         \n"
+      "str x27, [sp, #216]         \n"
+      "str x28, [sp, #224]         \n"
+      "str x29, [sp, #232]         \n"
+      "str x30, [sp, #240]         \n"
+      
+      // Call end function if x17 is 0
+      "cbnz x17, skip_end           \n"
+      "b end_tests                  \n"
+
+      "skip_end:                    \n"
+
+      "mov x29, #0                  \n" //TO BE REMOVED
+      
+      // TEMPORARY TO NOT DETECT THEM!
+      "mov x16, #0                 \n"
+      "mov x17, #0                 \n"
+
+      // CALL master_test
+      "adrp x16, master_test                \n"
+      "add  x16, x16, :lo12:master_test     \n"
+      // Give correct argument
+      "mov x0, sp                      \n"
+      "blr  x16                        \n"
+      
+      "mov x16, #0                 \n"
+      "mov x17, #0                 \n"
+
+      // Restore registers and jump back.
+      
+      "ldr x0, [sp, #0]         \n"
+      "ldr x1, [sp, #8]         \n"
+      "ldr x2, [sp, #16]         \n"
+      "ldr x3, [sp, #24]         \n"
+      "ldr x4, [sp, #32]         \n"
+      "ldr x5, [sp, #40]         \n"
+      "ldr x6, [sp, #48]         \n"
+      "ldr x7, [sp, #56]         \n"
+      "ldr x8, [sp, #64]         \n"
+      "ldr x9, [sp, #72]         \n"
+      "ldr x10, [sp, #80]         \n"
+      "ldr x11, [sp, #88]         \n"
+      "ldr x12, [sp, #96]         \n"
+      "ldr x13, [sp, #104]         \n"
+      "ldr x14, [sp, #112]         \n"
+      "ldr x15, [sp, #120]         \n"
+      "ldr x16, [sp, #128]         \n"
+      "ldr x17, [sp, #136]         \n"
+      "ldr x18, [sp, #144]         \n"
+      "ldr x19, [sp, #152]         \n"
+      "ldr x20, [sp, #160]         \n"
+      "ldr x21, [sp, #168]         \n"
+      "ldr x22, [sp, #176]         \n"
+      "ldr x23, [sp, #184]         \n"
+      "ldr x24, [sp, #192]         \n"
+      "ldr x25, [sp, #200]         \n"
+      "ldr x26, [sp, #208]         \n"
+      "ldr x27, [sp, #216]         \n"
+      "ldr x28, [sp, #224]         \n"
+      "ldr x29, [sp, #232]         \n"
+      "ldr x30, [sp, #240]         \n"
+
+      "add sp, sp, #256        \n"
+
+      "br x17                    \n"
+   );
+}
+
 
 void master_sigill(int sig, siginfo_t *si, void *uc)
 {
@@ -91,35 +204,12 @@ entrypoint_fn *image_start;
 
 void load_image(const char *imgfile)
 {
-   /* Load image file into memory as executable */
-   struct stat st;
-   fprintf(stderr, "loading test image %s...\n", imgfile);
-   int fd = open(imgfile, O_RDONLY);
-   if (fd < 0)
-   {
-      fprintf(stderr, "failed to open image file %s\n", imgfile);
-      exit(1);
-   }
-   if (fstat(fd, &st) != 0)
-   {
-      perror("fstat");
-      exit(1);
-   }
-   size_t len = st.st_size;
-   void *addr;
+   fprintf(stderr, "CALLED LOAD IMAGE\n");
+   image_start = load_with_inline_hooks(imgfile, master_hook_cb);
+   image_start_address = (uintptr_t)image_start;
+   fprintf(stderr, "LOADED IMAGE AT: %p\n", image_start);
+   sleep(1);
 
-   /* Map writable because we include the memory area for store
-    * testing in the image.
-    */
-   addr = mmap(0, len, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE, fd, 0);
-   if (!addr)
-   {
-      perror("mmap");
-      exit(1);
-   }
-   close(fd);
-   image_start = addr;
-   image_start_address = (uintptr_t)addr;
 }
 
 int master(int sock)
