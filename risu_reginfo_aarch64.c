@@ -17,47 +17,7 @@
 #include "risu.h"
 #include "risu_reginfo_aarch64.h"
 
-/* reginfo_init: initialize with a ucontext */
-/*void reginfo_init(struct reginfo *ri, ucontext_t *uc)
-{
-    int i;
-    struct _aarch64_ctx *ctx;
-    struct fpsimd_context *fp;
-    
-    memset(ri, 0, sizeof(*ri));
-
-    for (i = 0; i < 31; i++)
-        ri->regs[i] = uc->uc_mcontext.regs[i];
-
-    ri->sp = 0xdeadbeefdeadbeef;
-    ri->pc = uc->uc_mcontext.pc - image_start_address;
-    ri->flags = uc->uc_mcontext.pstate & 0xf0000000; 
-
-    ri->fault_address = uc->uc_mcontext.fault_address;
-    ri->faulting_insn = *((uint32_t *)uc->uc_mcontext.pc);
-    // For now assume only one instr was tested
-    ri->tested_insn = *((uint32_t *)uc->uc_mcontext.pc-1);
-
-    ctx = (struct _aarch64_ctx *)&uc->uc_mcontext.__reserved[0];
-
-    while (ctx->magic != FPSIMD_MAGIC && ctx->size != 0) {
-        ctx += (ctx->size + sizeof(*ctx) - 1) / sizeof(*ctx);
-    }
-
-    if (ctx->magic != FPSIMD_MAGIC || ctx->size != sizeof(*fp)) {
-        fprintf(stderr, "risu_reginfo_aarch64: failed to get FP/SIMD state\n");
-        return;
-    }
-
-    fp = (struct fpsimd_context *)ctx;
-    ri->fpsr = fp->fpsr;
-    ri->fpcr = fp->fpcr;
-
-    for (i = 0; i < 32; i++)
-        ri->vregs[i] = fp->vregs[i];
-};
-*/
-
+/* reginfo_init: initialize with data from stack */
 void reginfo_init(struct reginfo *ri, uint64_t *uc)
 {
     int i;
@@ -70,6 +30,11 @@ void reginfo_init(struct reginfo *ri, uint64_t *uc)
     for (i = 0; i < 31; i++)
         ri->regs[i] = uc[i];
 
+    // ZERO OUT REGISTER WE DO NOT WANT TO TEST
+    ri->regs[16] = 0;
+    ri->regs[17] = 0;
+
+    // Do not compare SP either!
     ri->sp = 0xdeadbeefdeadbeef;
     //ri->pc = uc->uc_mcontext.pc - image_start_address;
     ri->pc = 0;

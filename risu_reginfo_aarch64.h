@@ -30,7 +30,7 @@ struct reginfo
 };
 
 /* initialize structure from a ucontext */
-void reginfo_init(struct reginfo *ri, ucontext_t *uc);
+void reginfo_init(struct reginfo *ri, uint64_t *uc);
 
 /* return 1 if structs are equal, 0 otherwise. */
 int reginfo_is_eq(struct reginfo *r1, struct reginfo *r2);

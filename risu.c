@@ -26,18 +26,16 @@ void *memblock = 0;
 
 int apprentice_socket, master_socket;
 
-sigjmp_buf jmpbuf;
+int ismaster;
 
 /* Should we test for FP exception status bits? */
 int test_fp_exc = 0;
 
-void master_test(void* uc){
-   fprintf(stderr, "CALLED HOOK IN MASTER\n");
+void fail_tests(){
+   fprintf(stderr, "TESTS FAILED\n");
    sleep(2);
-   fprintf(stderr, "STATE: \n");
-   for(int i=0; i<31; i++){
-      fprintf(stderr, "R%x: %16lx\n", i, *((uint64_t*)uc+i));
-   }
+   report_match_status();
+   exit(1);
 }
 
 void end_tests(){
@@ -46,12 +44,47 @@ void end_tests(){
    exit(0);
 }
 
+void master_test(void* uc){
+   switch (recv_and_compare_register_info(master_socket, uc))
+   {
+      case 0:
+         /* match OK */
+         fprintf(stderr, "Match in master\n");
+         return;
+      default:
+         /* mismatch, or end of test */
+         fail_tests();
+   }
+}
+
+void apprentice_test(void* uc){
+   switch (send_register_info(apprentice_socket, uc))
+   {
+      case 0:
+         /* match OK */
+         fprintf(stderr, "Match in apprentice\n");
+         return;
+      case 1:
+         end_tests();
+      default:
+         /* mismatch */
+         fail_tests();
+   }
+}
+
+void compare_and_test(void* uc){
+   if(ismaster){
+      master_test(uc);
+   }
+   else{
+      apprentice_test(uc);
+   }
+}
+
 /* risu corrupts sp */
 __attribute__((naked))
 void master_hook_cb(){
    asm volatile(
-      "bti c                           \n"
-      
       
       // SAVE REGS
       "sub sp, sp, #256          \n"
@@ -92,22 +125,13 @@ void master_hook_cb(){
       "b end_tests                  \n"
 
       "skip_end:                    \n"
-
-      "mov x29, #0                  \n" //TO BE REMOVED
       
-      // TEMPORARY TO NOT DETECT THEM!
-      "mov x16, #0                 \n"
-      "mov x17, #0                 \n"
-
       // CALL master_test
-      "adrp x16, master_test                \n"
-      "add  x16, x16, :lo12:master_test     \n"
+      "adrp x16, compare_and_test                \n"
+      "add  x16, x16, :lo12:compare_and_test     \n"
       // Give correct argument
       "mov x0, sp                      \n"
       "blr  x16                        \n"
-      
-      "mov x16, #0                 \n"
-      "mov x17, #0                 \n"
 
       // Restore registers and jump back.
       
@@ -149,54 +173,6 @@ void master_hook_cb(){
    );
 }
 
-
-void master_sigill(int sig, siginfo_t *si, void *uc)
-{
-   switch (recv_and_compare_register_info(master_socket, uc))
-   {
-      case 0:
-         /* match OK */
-         printf("MATCH!\n");
-         advance_pc(uc);
-         return;
-      default:
-         /* mismatch, or end of test */
-         siglongjmp(jmpbuf, 1);
-   }
-}
-
-void apprentice_sigill(int sig, siginfo_t *si, void *uc)
-{
-   switch (send_register_info(apprentice_socket, uc))
-   {
-      case 0:
-         /* match OK */
-         advance_pc(uc);
-         return;
-      case 1:
-         /* end of test */
-         exit(0);
-      default:
-         /* mismatch */
-         exit(1);
-   }
-}
-
-static void set_sigill_handler(void (*fn)(int, siginfo_t *, void *))
-{
-   struct sigaction sa;
-   memset(&sa, 0, sizeof(struct sigaction));
-
-   sa.sa_sigaction = fn;
-   sa.sa_flags = SA_SIGINFO;
-   sigemptyset(&sa.sa_mask);
-   if (sigaction(SIGILL, &sa, 0) != 0)
-   {
-      perror("sigaction");
-      exit(1);
-   }
-}
-
 typedef void entrypoint_fn(void);
 
 uintptr_t image_start_address;
@@ -214,16 +190,8 @@ void load_image(const char *imgfile)
 
 int master(int sock)
 {
-   /* Sigsetjmp works like a goto. It returns if comming here on its own
-      and 1 if it was jumped back with siglongjmp */
-   if (sigsetjmp(jmpbuf, 1))
-   {
-      // Sleep to make sure prints are printed in order
-      sleep(2); 
-      return report_match_status();
-   }
+
    master_socket = sock;
-   set_sigill_handler(&master_sigill);
    fprintf(stderr, "starting image\n");
    image_start();
    fprintf(stderr, "image returned unexpectedly\n");
@@ -233,14 +201,13 @@ int master(int sock)
 int apprentice(int sock)
 {
    apprentice_socket = sock;
-   set_sigill_handler(&apprentice_sigill);
    fprintf(stderr, "starting image\n");
    image_start();
    fprintf(stderr, "image returned unexpectedly\n");
    exit(1);
 }
 
-int ismaster;
+
 
 void usage (void)
 {
