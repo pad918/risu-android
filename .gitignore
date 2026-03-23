@@ -8,3 +8,5 @@ config.h
 Makefile.in
 
 *.out
+*.log
+single_test.risu

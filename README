@@ -1,3 +1,25 @@
+# RISU for bad emulators
+
+This is a modified version of risu designed to work on bad
+emulators that don't support signal handlers. The following
+changes have been made to the code:
+
+* Software breakpoints have been replaced by inline trampolines
+* Memory operations are done in a buffer that is separate from the code to satisfy W^E requirements.
+* Since bad emulators will fully crash from any signal, we run each test separetly instead of using a signal handler to skip a failing instruction.
+
+## How to use
+Set arguments in the python file to test your specific environment. You can set the following paramters
+
+* Command to start master device
+* Command to start apprentice device
+* Cleanup command that runns after each test (e.g kill stuck process)
+
+
+
+
+# Original RISU description
+
 risu -- random instruction sequence generator for userspace testing
 
 risu is a tool intended to assist in testing the implementation of
