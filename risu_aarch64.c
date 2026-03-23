@@ -24,6 +24,8 @@ uint8_t apprentice_memblock[MEMBLOCKLEN];
 static int mem_used = 0;
 static int packet_mismatch = 0;
 
+void* writable_memory_block = NULL;
+
 /* SP must be 16 byte aligned */
 __attribute__((aligned(16), used)) char cb_stack[16384];
 
@@ -119,6 +121,8 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
     * testing in the image.
     */
    original_binary = mmap(0, original_len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+   writable_memory_block = original_binary;
+
 
    /* The binary modified with inline hooks can be up to 5 times as large */
    tests_with_inline_hooks = mmap(0, original_len * 5, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -142,12 +146,11 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
    */
    /* B label ==> has 26 bit immidiate that is the pc relative 
       target position in number of instructions*/
-   const uint64_t random_data_sp = 7*sizeof(uint32_t); 
-   fprintf(stderr, "B instr: %x\n", *(original_binary+7));
-   uint64_t branch_offset = ((*(original_binary+7)) & 0x3FFFFFF)<<2;
+
+   //fprintf(stderr, "B instr: %x\n", *(original_binary+7));
    uint64_t skip_next_n_instr = 0;
-   fprintf(stderr, "BRANCH OFFSET: %lx\n", branch_offset);
-   fprintf(stderr, "Skipping between x0%lx --> 0x%lx\n", random_data_sp, random_data_sp+branch_offset);
+   //fprintf(stderr, "BRANCH OFFSET: %lx\n", branch_offset);
+   //fprintf(stderr, "Skipping between x0%lx --> 0x%lx\n", random_data_sp, random_data_sp+branch_offset);
    while ((char *)curr_orig < (char *)original_binary + original_len)
    {
       uint64_t offset      = (uint64_t)curr_orig - (uint64_t)original_binary;
@@ -160,24 +163,11 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
 
       if (op_bits == 0 && skip_next_n_instr==0)
       {
-         fprintf(stderr, "FOUND SIGILL %lx, IMM: %x\t", offset, imm);
+         //fprintf(stderr, "FOUND SIGILL %lx, IMM: %x\t", offset, imm);
          uint64_t return_addr = (uint64_t)(curr_inlined + INLINE_HOOK_LENGTH - 3);
          uint32_t *template = NULL;
-         return_addr |=  (uint64_t)imm<<60ull; 
-         // Undefined instruction, replace with inline hook
-         switch(imm){
-            case OP_GETMEMBLOCK:
-            case OP_COMPAREMEM:
-               fprintf(stderr, "FOUND UNSUPPORTED UDF: %d\n", imm);
-               exit(1);
-               break;
-            case OP_TESTEND:
-            case OP_SETMEMBLOCK:
-            case OP_COMPARE:
-            default:
-               template = (uint32_t *)inline_hook_template;
-               break;
-         }
+         return_addr |=  (uint64_t)imm<<60ull;
+         template = (uint32_t *)inline_hook_template;
 
          // Copy the template hook
          for (int i = 0; i < INLINE_HOOK_LENGTH; i++)
@@ -197,18 +187,18 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
 
          for (int i = 0; i < INLINE_HOOK_LENGTH; i++)
          {
-            fprintf(stderr, "\tHook istr: %d : %x\n", i, *(curr_inlined + i));
+            //fprintf(stderr, "\tHook istr: %d : %x\n", i, *(curr_inlined + i));
          }
          curr_inlined += INLINE_HOOK_LENGTH;
       }
       else
       {
-         fprintf(stderr, "%lx ==> %lx: %x, op: %d\n", offset, offset_new, *curr_orig, op_bits);
+         //fprintf(stderr, "%lx ==> %lx: %x, op: %d\n", offset, offset_new, *curr_orig, op_bits);
          // If curr is branch, skip all instructions until the branch target instr
          if(!skip_next_n_instr && op_bits == 0b000101){
             uint32_t imm26 = (*curr_orig) & 0x03FFFFFF;
             skip_next_n_instr = imm26;
-            fprintf(stderr, "FOUND BRANCH, SKIPPING NEXT: 0x%x instr, INSTRUCTION: %08x\n ", skip_next_n_instr, *curr_orig);
+            //fprintf(stderr, "FOUND BRANCH, SKIPPING NEXT: 0x%x instr, INSTRUCTION: %08x\n ", skip_next_n_instr, *curr_orig);
          }
 
          // Normal instruction, just copy
@@ -224,21 +214,15 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
    /* Make the tests executable */
    mprotect(tests_with_inline_hooks, original_len * 5, PROT_EXEC | PROT_READ);
    close(fd);
-   munmap(original_binary, original_len);
    __builtin___clear_cache((char *)tests_with_inline_hooks, (char *)tests_with_inline_hooks + original_len * 5);
    return tests_with_inline_hooks;
 }
 
-void advance_pc(void *vuc)
-{
-   ucontext_t *uc = vuc;
-   uc->uc_mcontext.pc += 4;
-}
-
 static void set_x0(void *vuc, uint64_t x0)
 {
-   ucontext_t *uc = vuc;
-   uc->uc_mcontext.regs[0] = x0;
+   /* x0 is stored in the very start of the stack (uc) */
+   uint64_t *uc = vuc;
+   uc[0] = x0;
 }
 
 static int get_risuop(uint32_t insn)
@@ -264,7 +248,8 @@ int send_register_info(int sock, void *uc)
        */
       return send_data_pkt(sock, &ri, sizeof(ri));
    case OP_SETMEMBLOCK:
-      memblock = (void *)ri.regs[0];
+      memblock = writable_memory_block;//(void *)ri.regs[0];
+      fprintf(stderr, "Apprentice setting memblock %p\n", memblock);
       break;
    case OP_GETMEMBLOCK:
       set_x0(uc, ri.regs[0] + (uintptr_t)memblock);
@@ -329,11 +314,14 @@ int recv_and_compare_register_info(int sock, void *uc)
       resp = recv_and_compare(sock, op);
       break;
    case OP_SETMEMBLOCK:
-      fprintf(stderr, "Setting memblock:%p\n", (void *)master_ri.regs[0]);
-      memblock = (void *)master_ri.regs[0];
+      // Don't let it set it to the code memory! Instead
+      // give it a value to writable memory!
+      memblock = writable_memory_block;//(void *)master_ri.regs[0];
+      fprintf(stderr, "Setting memblock: %p\n", memblock);
       break;
    case OP_GETMEMBLOCK:
       set_x0(uc, master_ri.regs[0] + (uintptr_t)memblock);
+      fprintf(stderr, "Setting memblock: %p + 0x%lx\n", memblock, master_ri.regs[0]);
       break;
    case OP_COMPAREMEM:
       mem_used = 1;

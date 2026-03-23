@@ -33,14 +33,12 @@ int test_fp_exc = 0;
 
 void fail_tests(){
    fprintf(stderr, "TESTS FAILED\n");
-   sleep(2);
    report_match_status();
    exit(1);
 }
 
 void end_tests(){
    fprintf(stderr, "Ending tests normally\n");
-   sleep(2);
    exit(0);
 }
 
@@ -207,8 +205,7 @@ void load_image(const char *imgfile)
    image_start = load_with_inline_hooks(imgfile, master_hook_cb);
    image_start_address = (uintptr_t)image_start;
    fprintf(stderr, "LOADED IMAGE AT: %p\n", image_start);
-   sleep(1);
-
+   sleep(0.1);
 }
 
 int master(int sock)
