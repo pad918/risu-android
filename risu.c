@@ -50,11 +50,15 @@ void master_test(void* uc){
       case 0:
          /* match OK */
          fprintf(stderr, "Match in master\n");
-         return;
+         break;
+      case 1:
+         end_tests();
+         break;
       default:
          /* mismatch, or end of test */
          fail_tests();
    }
+   
 }
 
 void apprentice_test(void* uc){
@@ -72,13 +76,14 @@ void apprentice_test(void* uc){
    }
 }
 
-void compare_and_test(void* uc){
+void compare_and_test(void* uc, uint64_t return_addr){
    if(ismaster){
       master_test(uc);
    }
    else{
       apprentice_test(uc);
    }
+   fprintf(stderr, "Returning to the next instr at: %lx\n", return_addr);
 }
 
 /* risu corrupts sp */
@@ -87,7 +92,7 @@ void master_hook_cb(){
    asm volatile(
       
       // SAVE REGS
-      "sub sp, sp, #256          \n"
+      "sub sp, sp, #512          \n"
       "str x0, [sp, #0]         \n"
       "str x1, [sp, #8]         \n"
       "str x2, [sp, #16]         \n"
@@ -119,6 +124,15 @@ void master_hook_cb(){
       "str x28, [sp, #224]         \n"
       "str x29, [sp, #232]         \n"
       "str x30, [sp, #240]         \n"
+
+      // Store faulting instruction
+      // The type of test is stored in the upper 4 bits of the return address
+      "add sp, sp, #512          \n"
+      "ldr x17, [sp, #-16]         \n" // Load return addr
+      "sub sp, sp, #512          \n"
+      "lsr x0, x17, #60             \n" 
+      "str x0, [sp, #248]         \n"
+      
       
       // Call end function if x17 is 0
       "cbnz x17, skip_end           \n"
@@ -126,11 +140,13 @@ void master_hook_cb(){
 
       "skip_end:                    \n"
       
-      // CALL master_test
+      // CALL compare_and_test
       "adrp x16, compare_and_test                \n"
       "add  x16, x16, :lo12:compare_and_test     \n"
-      // Give correct argument
       "mov x0, sp                      \n"
+      "ldr x1, [sp, #496]            \n"
+      "lsl x1, x1, #16                 \n"
+      "lsr x1, x1, #16                 \n"
       "blr  x16                        \n"
 
       // Restore registers and jump back.
@@ -167,9 +183,16 @@ void master_hook_cb(){
       "ldr x29, [sp, #232]         \n"
       "ldr x30, [sp, #240]         \n"
 
-      "add sp, sp, #256        \n"
+      // Load original return addr
+      "ldr x16, [sp, #496]       \n"
+      // Remove the upper bits of the return address
+      "lsl x16, x16, #16         \n"
+      "lsr x16, x16, #16         \n"
+      "add sp, sp, #512        \n"
 
-      "br x17                    \n"
+      
+      //return
+      "br x16                    \n"
    );
 }
 

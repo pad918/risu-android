@@ -27,10 +27,10 @@ static int packet_mismatch = 0;
 /* SP must be 16 byte aligned */
 __attribute__((aligned(16), used)) char cb_stack[16384];
 
-#define INLINE_HOOK_LENGTH 12
-#define INLINE_HOOK_ADDR_OFFSET 6
-#define INLINE_HOOK_SP_OFFSET 8
-#define INLINE_HOOK_RETURN_OFFSET 10
+#define INLINE_HOOK_LENGTH 20
+#define INLINE_HOOK_ADDR_OFFSET 11
+#define INLINE_HOOK_SP_OFFSET 13
+#define INLINE_HOOK_RETURN_OFFSET 15
 /*
    Since AArch64 does not have ANY PC relative
    store instruciton, the hook 100% needs to
@@ -42,18 +42,32 @@ __attribute__((aligned(16), used)) char cb_stack[16384];
    must thus run the test two times, while
    not reseving the same register.
 
-   For now, I will just use x16 and x17
+   For now, I will just use x16
 */
 __attribute__((naked)) void inline_hook_template()
 {
    asm volatile(
-      // Overwrite SP (for now)
-      "ldr x16, #32           \n"
+      // Load new SP (to x16)
+      "ldr x16, #52           \n"
       "add x16, x16, #16384   \n"
-      "mov sp, x16            \n"
 
-      // Store return addr in x17
-      "ldr x17, #28           \n"
+      // Save old SP
+      // Because of Arm shenanigans, you 
+      // cannot use the SP as base register 
+      // in str instructions, and I don't want to 
+      // overwrite any other registers, so we temporarely
+      // store x0 to the new sp (x16)
+      "str x0, [x16, #-16]    \n" // Store original x0
+      "mov x0, sp             \n"   
+      // <== END UP HERE WITHOUT EXECUTING THE PREVIOUS INST!!!
+      // HOW TF IS THAT POSSIBLE????!?!?
+      "str x0, [x16, #-8]     \n" // Store original sp 
+      "mov sp, x16            \n" // Update SP
+      "ldr x0, [x16, #-16]    \n" // Load back original x0
+
+      // Store return addr on stack
+      "ldr x16, #32           \n"
+      "str x16, [sp, #-16]    \n"
 
       // Jump to cb
       "ldr x16, #8   \n" // Load the absole address
@@ -66,32 +80,11 @@ __attribute__((naked)) void inline_hook_template()
 
       ".int 0        \n" // Used for Return address
       ".int 0        \n" //
-   );
-}
 
-/* Special hook that ends the test (sets return address to null) */
-__attribute__((naked)) void final_inline_hook_template()
-{
-   asm volatile(
-      // Overwrite SP (for now)
-      "ldr x16, #32           \n"
-      "add x16, x16, #16384   \n"
+      "ldr x16, [sp, #-8]     \n"
       "mov sp, x16            \n"
-
-      // Return addr = 0 (tells risu to end the tests)
-      "mov x17, #0            \n"
-
-      // Jump to cb
-      "ldr x16, #8   \n" // Load the absole address
-      "br x16        \n" // Jump to the address
-      ".int 0        \n" // To be used for
-      ".int 0        \n" // callback addr
-
-      ".int 0        \n" // Used for SP
-      ".int 0        \n" //
-
-      ".int 0        \n" // Used for Return address
-      ".int 0        \n" //
+      // Set x16 = 0 to make it consistent!
+      "mov x16, xzr           \n"
    );
 }
 
@@ -140,27 +133,49 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
    /* Copy and add the inline hooks */
    uint32_t *curr_orig = original_binary;
    uint32_t *curr_inlined = tests_with_inline_hooks;
+
+   /* The 8:th instruction is always a branch instruction
+      The file contains random data between that branch and
+      its target that we must skip (some of the data could be
+      identified as udf instructions, but we dont want to add
+      hooks in the random data!)
+   */
+   /* B label ==> has 26 bit immidiate that is the pc relative 
+      target position in number of instructions*/
+   const uint64_t random_data_sp = 7*sizeof(uint32_t); 
+   fprintf(stderr, "B instr: %x\n", *(original_binary+7));
+   uint64_t branch_offset = ((*(original_binary+7)) & 0x3FFFFFF)<<2;
+   uint64_t skip_next_n_instr = 0;
+   fprintf(stderr, "BRANCH OFFSET: %lx\n", branch_offset);
+   fprintf(stderr, "Skipping between x0%lx --> 0x%lx\n", random_data_sp, random_data_sp+branch_offset);
    while ((char *)curr_orig < (char *)original_binary + original_len)
    {
-      uint64_t offset = (uint64_t)curr_orig - (uint64_t)original_binary;
-      uint32_t op_bits = (*curr_orig) >> 16;
+      uint64_t offset      = (uint64_t)curr_orig - (uint64_t)original_binary;
+      uint64_t offset_new  = (uint64_t)curr_inlined - (uint64_t)tests_with_inline_hooks;
+      uint32_t op_bits = (*curr_orig) >> 26;
       /* The imm is originally used to determine
          what type of test to execute, so we need to
          handle that as well */
-      uint32_t imm = (*curr_orig) & 0xFFFF;
-      // THE FIRST 140 instructions (0x230 bytes) should be copied normally
-      if (op_bits == 0 && offset > 0x230)
-      {
-         fprintf(stderr, "FOUND SIGILL %lx, IMM: %x\n", offset, imm);
+      uint32_t imm = (*curr_orig) & 0xF;
 
-         // Undefined instruction, replace with inline hook
+      if (op_bits == 0 && skip_next_n_instr==0)
+      {
+         fprintf(stderr, "FOUND SIGILL %lx, IMM: %x\t", offset, imm);
+         uint64_t return_addr = (uint64_t)(curr_inlined + INLINE_HOOK_LENGTH - 3);
          uint32_t *template = NULL;
+         return_addr |=  (uint64_t)imm<<60ull; 
+         // Undefined instruction, replace with inline hook
          switch(imm){
-            case 0x5af1:
-               template = (uint32_t *)final_inline_hook_template;
-               break; 
+            case OP_GETMEMBLOCK:
+            case OP_COMPAREMEM:
+               fprintf(stderr, "FOUND UNSUPPORTED UDF: %d\n", imm);
+               exit(1);
+               break;
+            case OP_TESTEND:
+            case OP_SETMEMBLOCK:
+            case OP_COMPARE:
             default:
-               template = (uint32_t *)inline_hook_template;  
+               template = (uint32_t *)inline_hook_template;
                break;
          }
 
@@ -177,23 +192,31 @@ void *load_with_inline_hooks(const char *imgfile, void (*cb)(void))
          *(uint64_t*)(curr_inlined + INLINE_HOOK_SP_OFFSET) = (uint64_t)cb_stack;
 
          // Add return address to the hook
-         *(uint64_t*)(curr_inlined + INLINE_HOOK_RETURN_OFFSET) = (uint64_t)(curr_inlined + INLINE_HOOK_LENGTH);
+         *(uint64_t*)(curr_inlined + INLINE_HOOK_RETURN_OFFSET) = return_addr;
          
 
          for (int i = 0; i < INLINE_HOOK_LENGTH; i++)
          {
             fprintf(stderr, "\tHook istr: %d : %x\n", i, *(curr_inlined + i));
          }
-
          curr_inlined += INLINE_HOOK_LENGTH;
       }
       else
       {
-         fprintf(stderr, "FOUND NORMAL: %lx, %x, op: %d\n", offset, *curr_orig, op_bits);
+         fprintf(stderr, "%lx ==> %lx: %x, op: %d\n", offset, offset_new, *curr_orig, op_bits);
+         // If curr is branch, skip all instructions until the branch target instr
+         if(!skip_next_n_instr && op_bits == 0b000101){
+            uint32_t imm26 = (*curr_orig) & 0x03FFFFFF;
+            skip_next_n_instr = imm26;
+            fprintf(stderr, "FOUND BRANCH, SKIPPING NEXT: 0x%x instr, INSTRUCTION: %08x\n ", skip_next_n_instr, *curr_orig);
+         }
+
          // Normal instruction, just copy
          *curr_inlined = *curr_orig;
          curr_inlined++;
       }
+      
+      if(skip_next_n_instr) skip_next_n_instr--;
 
       curr_orig++;
    }
@@ -220,13 +243,8 @@ static void set_x0(void *vuc, uint64_t x0)
 
 static int get_risuop(uint32_t insn)
 {
-   /* Return the risuop we have been asked to do
-    * (or -1 if this was a SIGILL for a non-risuop insn)
-    */
    uint32_t op = insn & 0xf;
-   uint32_t key = insn & ~0xf;
-   uint32_t risukey = 0x00005af0;
-   return (key != risukey) ? -1 : op;
+   return op;
 }
 
 int send_register_info(int sock, void *uc)
@@ -263,7 +281,7 @@ int recv_and_compare(int sock, int op)
    int resp = 0;
    int recv_err = recv_data_pkt(sock, &apprentice_ri, sizeof(apprentice_ri));
    uint64_t pc_save = apprentice_ri.pc;
-   /* Set apprentice PC to master PC temporarely
+   /* TODO: move. Set apprentice PC to master PC temporarely
    to avoid comparing PC values */
    apprentice_ri.pc = master_ri.pc;
    if (recv_err)
@@ -299,7 +317,7 @@ int recv_and_compare_register_info(int sock, void *uc)
 
    reginfo_init(&master_ri, uc);
    op = get_risuop(master_ri.faulting_insn);
-
+   fprintf(stderr, "Got test with OP:%d\n", op);
    switch (op)
    {
    case OP_COMPARE:
@@ -311,6 +329,7 @@ int recv_and_compare_register_info(int sock, void *uc)
       resp = recv_and_compare(sock, op);
       break;
    case OP_SETMEMBLOCK:
+      fprintf(stderr, "Setting memblock:%p\n", (void *)master_ri.regs[0]);
       memblock = (void *)master_ri.regs[0];
       break;
    case OP_GETMEMBLOCK:

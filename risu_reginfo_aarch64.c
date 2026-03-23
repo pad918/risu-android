@@ -41,8 +41,8 @@ void reginfo_init(struct reginfo *ri, uint64_t *uc)
     //ri->flags = uc->uc_mcontext.pstate & 0xf0000000;
     ri->flags = 0;
 
-    ri->fault_address = 0;//uc->uc_mcontext.fault_address;
-    ri->faulting_insn = 0;//*((uint32_t *)uc->uc_mcontext.pc);
+    ri->fault_address = 0;
+    ri->faulting_insn = uc[31];
     // For now assume only one instr was tested
     ri->tested_insn = 0;//*((uint32_t *)uc->uc_mcontext.pc-1);
     
