@@ -21,7 +21,6 @@ struct reginfo
     uint64_t pc;
     uint32_t flags;
     uint32_t faulting_insn;
-    uint32_t tested_insn;
 
     /* FP/SIMD */
     uint32_t fpsr;

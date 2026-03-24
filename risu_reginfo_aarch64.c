@@ -14,12 +14,14 @@
 #include <ucontext.h>
 #include <string.h>
 
+
 #include "risu.h"
 #include "risu_reginfo_aarch64.h"
 
 /* reginfo_init: initialize with data from stack */
 void reginfo_init(struct reginfo *ri, uint64_t *uc)
 {
+    fprintf(stderr, "REGINFO INIT\n");
     int i;
     struct _aarch64_ctx *ctx;
     struct fpsimd_context *fp;
@@ -27,45 +29,29 @@ void reginfo_init(struct reginfo *ri, uint64_t *uc)
     memset(ri, 0, sizeof(*ri));
 
     /* FOR NOW, ONLY COPY THE GP REGISTERS! */
-    for (i = 0; i < 31; i++)
-        ri->regs[i] = uc[i];
+    for (i = 0; i < 31; i++){
+        ri->regs[i] = uc[i];   
+    }
+    // WRITE CONSTANT TO REGISTERS WE DO NOT WANT TO TEST
+    ri->regs[16]    = 0xdeadbeefdeadbeef;
+    ri->sp          = 0xdeadbeefdeadbeef;
 
-    // ZERO OUT REGISTER WE DO NOT WANT TO TEST
-    ri->regs[16] = 0;
-    ri->regs[17] = 0;
-
-    // Do not compare SP either!
-    ri->sp = 0xdeadbeefdeadbeef;
     //ri->pc = uc->uc_mcontext.pc - image_start_address;
     ri->pc = 0;
-    //ri->flags = uc->uc_mcontext.pstate & 0xf0000000;
-    ri->flags = 0;
+    
+    ri->flags = uc[95]; // 760/8
+    ri->fpcr  = uc[96];
+    ri->fpsr  = uc[97];
 
     ri->fault_address = 0;
-    ri->faulting_insn = uc[31];
-    // For now assume only one instr was tested
-    ri->tested_insn = 0;//*((uint32_t *)uc->uc_mcontext.pc-1);
+    ri->faulting_insn = uc[98]; // 96 = 784/8
+
+    // Get the FP / Vector regs
+    __uint128_t* fp_ptr = (__uint128_t*)&uc[31];
+    for(int i=0; i<32; i++){
+        ri->vregs[i] = fp_ptr[i];
+    }
     
-    // SKIP Floating point and Vector state for now!
-    /*
-    ctx = (struct _aarch64_ctx *)&uc->uc_mcontext.__reserved[0];
-
-    while (ctx->magic != FPSIMD_MAGIC && ctx->size != 0) {
-        ctx += (ctx->size + sizeof(*ctx) - 1) / sizeof(*ctx);
-    }
-
-    if (ctx->magic != FPSIMD_MAGIC || ctx->size != sizeof(*fp)) {
-        fprintf(stderr, "risu_reginfo_aarch64: failed to get FP/SIMD state\n");
-        return;
-    }
-
-    fp = (struct fpsimd_context *)ctx;
-    ri->fpsr = fp->fpsr;
-    ri->fpcr = fp->fpcr;
-
-    for (i = 0; i < 32; i++)
-        ri->vregs[i] = fp->vregs[i];
-    */
 };
 
 /* reginfo_is_eq: compare the reginfo structs, returns nonzero if equal */
@@ -102,7 +88,6 @@ int reginfo_dump_mismatch(struct reginfo *m, struct reginfo *a, FILE *f)
 {
     int i;
     fprintf(f, "mismatch detail (master : apprentice):\n");
-    fprintf(f, "Tested instruction: %08x\n", m->tested_insn);
     if (m->faulting_insn != a->faulting_insn) {
         fprintf(f, "  faulting insn mismatch %08x vs %08x\n",
                 m->faulting_insn, a->faulting_insn);

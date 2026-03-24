@@ -61,8 +61,7 @@ __attribute__((naked)) void inline_hook_template()
       // store x0 to the new sp (x16)
       "str x0, [x16, #-16]    \n" // Store original x0
       "mov x0, sp             \n"   
-      // <== END UP HERE WITHOUT EXECUTING THE PREVIOUS INST!!!
-      // HOW TF IS THAT POSSIBLE????!?!?
+
       "str x0, [x16, #-8]     \n" // Store original sp 
       "mov sp, x16            \n" // Update SP
       "ldr x0, [x16, #-16]    \n" // Load back original x0
@@ -265,10 +264,7 @@ int recv_and_compare(int sock, int op)
 {
    int resp = 0;
    int recv_err = recv_data_pkt(sock, &apprentice_ri, sizeof(apprentice_ri));
-   uint64_t pc_save = apprentice_ri.pc;
-   /* TODO: move. Set apprentice PC to master PC temporarely
-   to avoid comparing PC values */
-   apprentice_ri.pc = master_ri.pc;
+   
    if (recv_err)
    {
       packet_mismatch = 1;
@@ -284,7 +280,6 @@ int recv_and_compare(int sock, int op)
       resp = 1;
    }
    send_response_byte(sock, resp);
-   apprentice_ri.pc = pc_save;
    return resp;
 }
 

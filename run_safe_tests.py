@@ -5,23 +5,41 @@ import shlex
 import time
 import os
 from tqdm import tqdm
+from enum import Enum
 
 # Paths
-MASTER_RISU_FILE = "aarch64.risu"
+MASTER_RISU_FILE = "aarch64_hang.risu"
 #MASTER_RISU_FILE = "../aarch64_minimal.risu"
 LOCAL_TMP_RISU   = "single_test.risu"
 LOCAL_TMP_BIN    = "single_test.bin"
 REMOTE_TMP_BIN   = "/data/local/tmp/risu/single_test.bin"
 
 FLUSH_INTERVAL = 30
+PRINT_ERROR_LOGS = False
+# For testing frida
+ARE_SIGILL_SIGTRAP_SAME = True
 
 # Define paths and commands here
 
-CMD_RISUGEN = "./risugen --numinsns 1 {local_risu} {local_bin}"
+CMD_RISUGEN = "./risugen --numinsns 10 {local_risu} {local_bin}"
 CMD_PUSH = "adb push {local_bin} {remote_bin}"
 CMD_MASTER = "adb shell /data/local/tmp/risu/risu --master {remote_bin}"
-CMD_APPRENTICE = "adb shell /data/local/tmp/risu/risu --host localhost {remote_bin}"
+CMD_APPRENTICE = "../.venv/bin/frida -U -l ../frida_instrument_risu.js -f /data/local/tmp/risu/risu -- --host localhost {remote_bin}"
 CMD_CLEANUP = "adb shell pkill -9 risu"
+
+#frida -U \
+#      -l frida_instrument_risu.js \
+#      -f /data/local/tmp/risu/risu \
+#      -- --host localhost /data/local/tmp/risu/aarch_android.out
+
+class TestResult(Enum):
+    PASS_SAME_ERROR = 1
+    PASS_NO_ERROR = 2
+    FAIL_HANGED = 4
+    FAIL_DIFF_SIGNAL = 8
+    FAIL_SCILENT = 16
+    FAIL_STATE_DIFF = 16
+
 
 # PARSER LOGIC
 def parse_risu_file(filepath):
@@ -78,6 +96,93 @@ def run_command(cmd_template, blocking=True, timeout=None):
                                 stderr=subprocess.PIPE, 
                                 text=True)
 
+"""
+    Executes a test with the data that is currently
+    on the device and returns Success / Failure.
+"""
+def execute_single_test(insn_name):
+    # Start Master non-blocking
+    master_proc = run_command(CMD_MASTER, blocking=False)
+    time.sleep(0.5)
+    
+    # Start Apprentice
+    status = TestResult.PASS_NO_ERROR
+    app_out = ""
+    app_err = ""
+    is_fail = False
+
+    try:
+        res_app = run_command(CMD_APPRENTICE, blocking=True, timeout=10)
+        app_out = res_app.stdout
+        app_err = res_app.stderr
+        
+        # Avoid race conditions
+        try:
+            master_proc.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+        # Get apprentice crash
+        full_output = (res_app.stdout + res_app.stderr).lower()
+        app_simulated_exit = 0
+        
+        # Allow a virtual exit code to be used in the form
+        # CRASH_SIGNAL: X
+        for line in [l.strip() for l in full_output.split("\n")]:
+            if(line.startswith("signal")):
+                app_crash_signal = int(line.split(" ")[1])
+                app_simulated_exit = 128 + app_crash_signal
+                if(app_simulated_exit == 133 and ARE_SIGILL_SIGTRAP_SAME):
+                    app_simulated_exit = 132
+
+        # Check Master's final state after Apprentice finishes/crashes
+        master_proc.poll()
+        master_crashed = master_proc.returncode is not None and master_proc.returncode != 0
+        
+        #if app_simulated_exit == 0 and res_app.returncode != 0:
+        #    app_simulated_exit = res_app.returncode
+
+        if master_crashed and app_simulated_exit!=0:
+            if master_proc.returncode != app_simulated_exit:
+                status = TestResult.FAIL_DIFF_SIGNAL
+            else:
+                status = TestResult.PASS_SAME_ERROR
+        elif master_crashed:
+            status = TestResult.FAIL_DIFF_SIGNAL
+        elif app_simulated_exit!=0:
+            status = TestResult.FAIL_DIFF_SIGNAL
+        else:
+            if "ending tests normally" in full_output or "match in apprentice" in full_output:
+                status = TestResult.PASS_NO_ERROR
+            elif "mismatch" in full_output:
+                status = TestResult.FAIL_STATE_DIFF
+            else:
+                status = TestResult.FAIL_SCILENT
+                
+    except subprocess.TimeoutExpired:
+        status = TestResult.FAIL_HANGED
+
+    
+    # Check if this iteration was a failure
+    is_fail = (status.value & 0b11) == 0
+    master_out, master_err = master_proc.communicate()
+    fail_block = (
+        # String concatenation works the same in 
+        # python as in C!
+        f"\n{'='*70}\n"
+        f" DETAILED FAILURE LOG: {insn_name}\n"
+        f" STATUS: {status}\n"
+        f"{'-'*70}\n"
+        f" [MASTER STDOUT]\n{master_out.strip()}\n\n"
+        f" [MASTER STDERR]\n{master_err.strip()}\n"
+        f"{'-'*70}\n"
+        f" [APPRENTICE STDOUT]\n{app_out.strip()}\n\n"
+        f" [APPRENTICE STDERR]\n{app_err.strip()}\n"
+        f"{'='*70}\n"
+    )
+
+    return is_fail, status, fail_block
+
 
 def main():
     print("=== Parsing master risu file ===")
@@ -111,82 +216,23 @@ def main():
                 log.write(f"[{insn_name}] FAIL: ADB Push Error\n")
                 continue
 
-            # Start Master non-blocking
-            master_proc = run_command(CMD_MASTER, blocking=False)
-            time.sleep(0.5)
-            
-            # Start Apprentice
-            status = ""
-            app_out = ""
-            app_err = ""
-            is_fail = False
+            # Give it multiple tries since it sometimes hangs
+            for i in range(2):
+                is_fail, status, fail_block = execute_single_test(insn_name)
 
-            try:
-                res_app = run_command(CMD_APPRENTICE, blocking=True, timeout=10)
-                app_out = res_app.stdout
-                app_err = res_app.stderr
+                # Cleanup Environment (kill stuck process e.t.c.)
+                run_command(CMD_CLEANUP)
                 
                 # Avoid race conditions
-                try:
-                    master_proc.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    pass
-
-                # Check Master's final state after Apprentice finishes/crashes
-                master_proc.poll()
-                master_crashed = master_proc.returncode is not None and master_proc.returncode != 0
-                app_crashed = res_app.returncode != 0
-
-                if master_crashed and app_crashed:
-                    if master_proc.returncode != res_app.returncode:
-                        status = f"FAIL (Signal Mismatch! Master Exit: {master_proc.returncode}, App Exit: {res_app.returncode})"
-                    else:
-                        status = f"PASS (Both crashed with Exit {res_app.returncode})"
-                elif master_crashed:
-                    status = f"FAIL (Only Master Crashed, Master Exit: {master_proc.returncode}, App Exit: {res_app.returncode})"
-                elif app_crashed:
-                    status = f"FAIL (Only Emulator Crashed, App Exit: {res_app.returncode}, Master Exit: {master_proc.returncode})"
+                time.sleep(0.2)
+                if(status != TestResult.FAIL_HANGED):
+                    break
                 else:
-                    full_output = (res_app.stdout + res_app.stderr).lower()
-                    if "ending tests normally" in full_output or "match in apprentice" in full_output:
-                        status = "PASS (Match)"
-                    elif "mismatch" in full_output:
-                        status = "FAIL (Register/Mem Mismatch)"
-                    else:
-                        status = f"FAIL (Silent). Apprentice Output: {full_output.strip()}"
-                        
-            except subprocess.TimeoutExpired:
-                status = "FAIL (Timeout - Hang detected)"
-            
-            # Check if this iteration was a failure
-            is_fail = "FAIL" in status
+                    print("HANGED!, retrying instruction: ", insn_name)
 
-            log.write(f"[{insn_name}] {status}\n")
-
-            # Cleanup Environment (kill stuck process e.t.c.)
-            run_command(CMD_CLEANUP)
-            
-            master_out, master_err = master_proc.communicate()
-            
-            if is_fail:
-                fail_block = (
-                    # String concatenation works the same in 
-                    # python as in C!
-                    f"\n{'='*70}\n"
-                    f" DETAILED FAILURE LOG: {insn_name}\n"
-                    f" STATUS: {status}\n"
-                    f"{'-'*70}\n"
-                    f" [MASTER STDOUT]\n{master_out.strip()}\n\n"
-                    f" [MASTER STDERR]\n{master_err.strip()}\n"
-                    f"{'-'*70}\n"
-                    f" [APPRENTICE STDOUT]\n{app_out.strip()}\n\n"
-                    f" [APPRENTICE STDERR]\n{app_err.strip()}\n"
-                    f"{'='*70}\n"
-                )
+            if is_fail and PRINT_ERROR_LOGS:
                 log.write(fail_block)
-            
-            # Avoid race conditions
-            time.sleep(0.2)
+            log.write(f"[{status.name}] <{insn_name}>\n")
 
             # Flush often so we keep results even it
             # It dies prematurly
