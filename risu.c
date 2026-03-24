@@ -39,6 +39,9 @@ void fail_tests(){
 
 void end_tests(){
    fprintf(stderr, "Ending tests normally\n");
+   // Frida will not receive all prints
+   // if we close immediately, so we add a delay
+   sleep(1);
    exit(0);
 }
 

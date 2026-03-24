@@ -8,20 +8,20 @@ from tqdm import tqdm
 from enum import Enum
 
 # Paths
-MASTER_RISU_FILE = "aarch64_hang.risu"
+MASTER_RISU_FILE = "aarch64.risu"
 #MASTER_RISU_FILE = "../aarch64_minimal.risu"
 LOCAL_TMP_RISU   = "single_test.risu"
 LOCAL_TMP_BIN    = "single_test.bin"
 REMOTE_TMP_BIN   = "/data/local/tmp/risu/single_test.bin"
 
 FLUSH_INTERVAL = 30
-PRINT_ERROR_LOGS = False
+PRINT_ERROR_LOGS = True
 # For testing frida
 ARE_SIGILL_SIGTRAP_SAME = True
 
 # Define paths and commands here
 
-CMD_RISUGEN = "./risugen --numinsns 10 {local_risu} {local_bin}"
+CMD_RISUGEN = "./risugen --numinsns 32 {local_risu} {local_bin}"
 CMD_PUSH = "adb push {local_bin} {remote_bin}"
 CMD_MASTER = "adb shell /data/local/tmp/risu/risu --master {remote_bin}"
 CMD_APPRENTICE = "../.venv/bin/frida -U -l ../frida_instrument_risu.js -f /data/local/tmp/risu/risu -- --host localhost {remote_bin}"
@@ -38,7 +38,7 @@ class TestResult(Enum):
     FAIL_HANGED = 4
     FAIL_DIFF_SIGNAL = 8
     FAIL_SCILENT = 16
-    FAIL_STATE_DIFF = 16
+    FAIL_DIFF_CRASH_POINTS = 32
 
 
 # PARSER LOGIC
@@ -84,12 +84,16 @@ def run_command(cmd_template, blocking=True, timeout=None):
     )
     args = shlex.split(cmd_str)
     
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
     if blocking:
         return subprocess.run(args, 
                               stdout=subprocess.PIPE, 
                               stderr=subprocess.PIPE, 
                               text=True, 
-                              timeout=timeout)
+                              timeout=timeout,
+                              env=env)
     else:
         return subprocess.Popen(args, 
                                 stdout=subprocess.PIPE, 
@@ -120,15 +124,18 @@ def execute_single_test(insn_name):
         try:
             master_proc.wait(timeout=1.0)
         except subprocess.TimeoutExpired:
-            pass
+            return False, TestResult.FAIL_HANGED, "HANGED"
+
+        master_out, master_err = master_proc.communicate()
+        master_full_output = (master_out + master_err).lower()
 
         # Get apprentice crash
-        full_output = (res_app.stdout + res_app.stderr).lower()
+        app_full_output = (res_app.stdout + res_app.stderr).lower()
         app_simulated_exit = 0
         
         # Allow a virtual exit code to be used in the form
         # CRASH_SIGNAL: X
-        for line in [l.strip() for l in full_output.split("\n")]:
+        for line in [l.strip() for l in app_full_output.split("\n")]:
             if(line.startswith("signal")):
                 app_crash_signal = int(line.split(" ")[1])
                 app_simulated_exit = 128 + app_crash_signal
@@ -139,11 +146,15 @@ def execute_single_test(insn_name):
         master_proc.poll()
         master_crashed = master_proc.returncode is not None and master_proc.returncode != 0
         
+        num_master_matches = master_full_output.count("match in master")
+        num_appr_matches = app_full_output.count("match in apprentice")
+
         #if app_simulated_exit == 0 and res_app.returncode != 0:
         #    app_simulated_exit = res_app.returncode
-
         if master_crashed and app_simulated_exit!=0:
-            if master_proc.returncode != app_simulated_exit:
+            if(num_appr_matches != num_master_matches):
+                status = TestResult.FAIL_DIFF_CRASH_POINTS
+            elif master_proc.returncode != app_simulated_exit:
                 status = TestResult.FAIL_DIFF_SIGNAL
             else:
                 status = TestResult.PASS_SAME_ERROR
@@ -152,20 +163,31 @@ def execute_single_test(insn_name):
         elif app_simulated_exit!=0:
             status = TestResult.FAIL_DIFF_SIGNAL
         else:
-            if "ending tests normally" in full_output or "match in apprentice" in full_output:
+            if ("ending tests normally" in app_full_output 
+                and "ending tests normally" in master_full_output
+                and num_master_matches == num_appr_matches):
                 status = TestResult.PASS_NO_ERROR
-            elif "mismatch" in full_output:
-                status = TestResult.FAIL_STATE_DIFF
+            elif num_master_matches != num_appr_matches:
+                status = TestResult.FAIL_DIFF_CRASH_POINTS
+                print(f"NUM A: {num_appr_matches}, NUM M: {num_master_matches}")
+                print(f"=== FULL MASTER OUTPUT ===")
+                print(master_full_output)
+                print(f"=== FULL APPRENTICE OUTPUT ===")
+                print(app_full_output)
+            elif num_master_matches == 0 and num_appr_matches == 0:
+                print("!!!!FOUND THE STRANGE STATE!!!!")
+                status = TestResult.FAIL_HANGED
             else:
                 status = TestResult.FAIL_SCILENT
                 
     except subprocess.TimeoutExpired:
         status = TestResult.FAIL_HANGED
+        return True, status, "COULD NOT READ?"
 
     
     # Check if this iteration was a failure
     is_fail = (status.value & 0b11) == 0
-    master_out, master_err = master_proc.communicate()
+    
     fail_block = (
         # String concatenation works the same in 
         # python as in C!
@@ -229,7 +251,7 @@ def main():
                     break
                 else:
                     print("HANGED!, retrying instruction: ", insn_name)
-
+            
             if is_fail and PRINT_ERROR_LOGS:
                 log.write(fail_block)
             log.write(f"[{status.name}] <{insn_name}>\n")

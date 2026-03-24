@@ -236,7 +236,7 @@ int send_register_info(int sock, void *uc)
    int op;
    reginfo_init(&ri, uc);
    op = get_risuop(ri.faulting_insn);
-
+   fprintf(stderr, "Apprentice got op: %d\n", op);
    switch (op)
    {
    case OP_COMPARE:
